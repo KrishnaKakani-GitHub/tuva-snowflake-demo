@@ -1,10 +1,18 @@
 name: Tuva build -- Snowflake (production)
 
-# Manual only. The `production` environment should require a reviewer, so every
-# run that writes to Snowflake passes a human approval gate first.
+# Manual only. Human gate that works on every GitHub plan (environments and
+# required reviewers need a paid plan for private repos):
+#   1. only a person with write access can trigger workflow_dispatch;
+#   2. the actor must be on the ALLOWED_ACTORS allowlist (repo variable,
+#      comma-separated; defaults to the repo owner only);
+#   3. they must type BUILD to confirm, plus a reason for the audit log.
 on:
   workflow_dispatch:
     inputs:
+      confirm:
+        description: "Type BUILD to confirm this run writes to Snowflake TUVA_DEMO"
+        required: true
+        type: string
       reason:
         description: "Why are you running this? (recorded in the audit log)"
         required: true
@@ -46,7 +54,6 @@ jobs:
   build:
     name: dbt build (${{ inputs.scope }}, ${{ inputs.synthetic_data_size }})
     runs-on: ubuntu-24.04
-    environment: production
     timeout-minutes: 120
     env:
       DBT_PROFILES_DIR: ${{ github.workspace }}/profiles
@@ -66,10 +73,21 @@ jobs:
       BUILD_SCOPE: ${{ inputs.scope }}
       SYNTHETIC_DATA_SIZE: ${{ inputs.synthetic_data_size }}
       DATA_QUALITY: ${{ inputs.data_quality }}
+      CONFIRM: ${{ inputs.confirm }}
+      ACTOR: ${{ github.actor }}
+      ALLOWED_ACTORS: ${{ vars.ALLOWED_ACTORS || github.repository_owner }}
     steps:
-      - name: Guard - target must be the isolated demo database
+      - name: Guard - human approval, allowlist and isolated target
         run: |
           set -euo pipefail
+          if [[ "${CONFIRM}" != "BUILD" ]]; then
+            echo "::error::Not confirmed. Re-run and type BUILD in the confirm box."; exit 1
+          fi
+          allowed=",${ALLOWED_ACTORS// /},"
+          if [[ "${allowed,,}" != *",${ACTOR,,},"* ]]; then
+            echo "::error::${ACTOR} is not in ALLOWED_ACTORS (${ALLOWED_ACTORS})."; exit 1
+          fi
+          echo "Approved: ${ACTOR} confirmed the run (allowlist: ${ALLOWED_ACTORS})."
           if [[ "${SNOWFLAKE_DATABASE}" != "TUVA_DEMO" ]]; then
             echo "::error::Refusing to build outside TUVA_DEMO (got ${SNOWFLAKE_DATABASE})"; exit 1
           fi

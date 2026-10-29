@@ -1,0 +1,62 @@
+name: CI
+
+# No Snowflake access: unit tests + an offline dbt parse of the pinned Tuva
+# project with dummy credentials, so profile/var mistakes fail before prod.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.12"
+  TUVA_CORE_REPO: tuva-health/tuva-core
+  TUVA_CORE_REF: 131d12a5225282563917b76af92718b555c24d4d
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      DBT_PROFILES_DIR: ${{ github.workspace }}/profiles
+      DBT_PROJECT_DIR: ${{ github.workspace }}/tuva-core/integration_tests
+      DBT_SEND_ANONYMOUS_USAGE_STATS: "false"
+      SNOWFLAKE_ACCOUNT: ci-dummy
+      SNOWFLAKE_PRIVATE_KEY: ci-dummy
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: ${{ env.TUVA_CORE_REPO }}
+          ref: ${{ env.TUVA_CORE_REF }}
+          path: tuva-core
+          persist-credentials: false
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+          python -m pip check
+
+      - name: Unit tests
+        run: python -m pytest -q
+
+      - name: Guard - pinned Tuva ref matches the production workflow
+        run: |
+          grep -q "TUVA_CORE_REF: ${TUVA_CORE_REF}" .github/workflows/tuva-build.yml \
+            || { echo "::error::TUVA_CORE_REF drifted between ci.yml and tuva-build.yml"; exit 1; }
+
+      - name: dbt deps + parse (offline)
+        run: |
+          dbt deps  --project-dir "$DBT_PROJECT_DIR"
+          dbt parse --project-dir "$DBT_PROJECT_DIR" --vars '{synthetic_data_size: small, data_quality_enabled: false}'

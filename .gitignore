@@ -1,0 +1,17 @@
+# secrets: never commit keys
+*.p8
+*.pem
+*.pub
+.env
+
+# dbt / python
+tuva-core/
+dbt-target/
+dbt_packages/
+target/
+logs/
+.venv/
+__pycache__/
+.pytest_cache/
+audit.json
+smoke.json

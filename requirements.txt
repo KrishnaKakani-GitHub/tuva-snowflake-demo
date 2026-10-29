@@ -1,0 +1,6 @@
+# Pinned to the exact versions Tuva Core v1.0.0 runs in its own Snowflake CI
+# (tuva-core/.github/workflows/ci.yml). Newer dbt 1.12.x exists but is untested by Tuva.
+dbt-core==1.11.14
+dbt-snowflake==1.11.6
+sqlparse==0.6.0
+pydantic==2.14.1

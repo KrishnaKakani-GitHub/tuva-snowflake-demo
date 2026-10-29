@@ -1,0 +1,24 @@
+# dbt profile for the Tuva integration_tests project (its profile name is `default`).
+# Every value comes from the environment; nothing secret is committed.
+# Auth is key-pair only (TUVA_DEMO_SVC is a TYPE=SERVICE user with no password).
+default:
+  target: prod
+  outputs:
+    prod:
+      type: snowflake
+      account: "{{ env_var('SNOWFLAKE_ACCOUNT') }}"
+      user: "{{ env_var('SNOWFLAKE_USER', 'TUVA_DEMO_SVC') }}"
+      private_key: "{{ env_var('SNOWFLAKE_PRIVATE_KEY') }}"
+      private_key_passphrase: "{{ env_var('SNOWFLAKE_PRIVATE_KEY_PASSPHRASE', '') }}"
+      role: "{{ env_var('SNOWFLAKE_ROLE', 'TUVA_DEMO_TRANSFORMER') }}"
+      warehouse: "{{ env_var('SNOWFLAKE_WAREHOUSE', 'TUVA_DEMO_WH') }}"
+      database: "{{ env_var('SNOWFLAKE_DATABASE', 'TUVA_DEMO') }}"
+      schema: "{{ env_var('SNOWFLAKE_SCHEMA', 'TUVA') }}"
+      # Every statement is tagged with run id + actor so Snowflake QUERY_HISTORY
+      # answers who/what/when for each change.
+      query_tag: "{{ env_var('DBT_QUERY_TAG', 'tuva-demo:local') }}"
+      threads: 8
+      connect_retries: 3
+      connect_timeout: 30
+      retry_on_database_errors: true
+      client_session_keep_alive: false

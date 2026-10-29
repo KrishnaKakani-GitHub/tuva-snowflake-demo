@@ -1,0 +1,9 @@
+[project]
+name = "tuva-snowflake-demo"
+version = "0.1.0"
+description = "Production-style Tuva Core v1.0.0 build on an isolated Snowflake footprint (synthetic data)"
+requires-python = ">=3.12"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

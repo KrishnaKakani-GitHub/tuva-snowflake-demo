@@ -1,5 +1,9 @@
 """Shared Snowflake connection for the CLI tools (key-pair auth from env vars).
 
+The private key is parsed with dbt-snowflake's own loader, so these tools accept
+exactly the formats `dbt debug` / `dbt build` accept from the same secret:
+full PEM text, or the base64 key body without BEGIN/END lines (DER).
+
 PHI: none. Connects to the isolated TUVA_DEMO database only.
 """
 
@@ -12,35 +16,21 @@ if TYPE_CHECKING:
     from snowflake.connector import SnowflakeConnection
 
 
-def _normalize_private_key_pem(pem: str) -> str:
-    """Accept both raw PEM text and GitHub-style escaped newline values.
+def load_private_key_der(key_text: str, passphrase: str | None) -> bytes:
+    """Return the key as unencrypted PKCS8 DER bytes for snowflake.connector."""
+    from cryptography.hazmat.primitives import serialization
+    from dbt.adapters.snowflake.auth import private_key_from_string
 
-    GitHub Actions secrets can arrive with literal backslash-n sequences when a
-    secret is sourced from JSON or a shell-escaped environment. The Snowflake
-    connector expects actual PEM newlines, so normalize both forms before parsing.
-    """
-    text = (pem or "").strip()
+    text = (key_text or "").strip()
     if not text:
         raise ValueError("SNOWFLAKE_PRIVATE_KEY is empty")
-    if text.startswith('"') and text.endswith('"'):
-        text = text[1:-1]
-    text = text.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\r", "\r")
-    return text.strip()
-
-
-def load_private_key_der(pem: str, passphrase: str | None) -> bytes:
-    from cryptography.hazmat.primitives import serialization
-
-    normalized_pem = _normalize_private_key_pem(pem)
-    password = passphrase.strip().encode() if passphrase and passphrase.strip() else None
     try:
-        key = serialization.load_pem_private_key(
-            normalized_pem.encode(), password=password
-        )
-    except ValueError as exc:
+        key = private_key_from_string(text, passphrase or None)
+    except (ValueError, TypeError) as exc:
+        # Never include key material in the message.
         raise ValueError(
-            "Could not parse SNOWFLAKE_PRIVATE_KEY. It must contain a PEM private key "
-            "(with actual newlines, or escaped \\n sequences if injected from JSON/shell)."
+            "Could not load SNOWFLAKE_PRIVATE_KEY with the given passphrase. Expected the "
+            "contents of the .p8 file (PEM, or its base64 body) and the matching passphrase."
         ) from exc
     return key.private_bytes(
         encoding=serialization.Encoding.DER,
@@ -53,14 +43,11 @@ def connect_from_env(default_role: str, tag_suffix: str) -> SnowflakeConnection:
     import snowflake.connector
 
     env = os.environ
-    private_key = env.get("SNOWFLAKE_PRIVATE_KEY")
-    if not private_key:
-        raise ValueError("Missing required env var: SNOWFLAKE_PRIVATE_KEY")
     return snowflake.connector.connect(
         account=env["SNOWFLAKE_ACCOUNT"],
         user=env.get("SNOWFLAKE_USER", "TUVA_DEMO_SVC"),
         private_key=load_private_key_der(
-            private_key, env.get("SNOWFLAKE_PRIVATE_KEY_PASSPHRASE") or None
+            env.get("SNOWFLAKE_PRIVATE_KEY", ""), env.get("SNOWFLAKE_PRIVATE_KEY_PASSPHRASE")
         ),
         role=env.get("SNOWFLAKE_ROLE", default_role),
         warehouse=env.get("SNOWFLAKE_WAREHOUSE", "TUVA_DEMO_WH"),

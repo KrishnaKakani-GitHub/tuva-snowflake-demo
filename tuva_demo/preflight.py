@@ -68,11 +68,16 @@ def build_statements(uri: str, database: str) -> list[str]:
     return [
         f"create schema if not exists {schema} comment = 'Tuva demo preflight scratch space'",
         f"create or replace temporary table {schema}.S3_ACCESS_CHECK (c1 varchar)",
-        # Same shape as the_tuva_project.snowflake__load_seed: inline s3 URL, no credentials.
-        f"""copy into {schema}.S3_ACCESS_CHECK (c1)
-from (select $1 from 's3://{uri}/')
+        # Mirrors the_tuva_project.snowflake__load_seed: no transformation subquery
+        # (Snowflake rejects SELECT ... FROM 's3://...' with "invalid URL prefix"),
+        # unquoted s3:// folder + PATTERN. ERROR_ON_COLUMN_COUNT_MISMATCH = FALSE
+        # lets the 1-column table keep only the first field of each row.
+        f"""copy into {schema}.S3_ACCESS_CHECK
+from s3://{uri}
 file_format = (type = csv compression = gzip skip_header = 1
-               field_optionally_enclosed_by = '"' error_on_column_count_mismatch = false)
+               empty_field_as_null = true
+               field_optionally_enclosed_by = '"'
+               error_on_column_count_mismatch = false)
 pattern = '.*/{PROBE_SEED}[.]csv[.]gz'
 on_error = abort_statement""",
     ]

@@ -108,9 +108,14 @@ USE ROLE TUVA_DEMO_TRANSFORMER;
 USE WAREHOUSE TUVA_DEMO_WH;
 CREATE SCHEMA IF NOT EXISTS TUVA_DEMO.TUVA_PREFLIGHT;
 CREATE OR REPLACE TEMPORARY TABLE TUVA_DEMO.TUVA_PREFLIGHT.S3_ACCESS_CHECK (c1 VARCHAR);
-COPY INTO TUVA_DEMO.TUVA_PREFLIGHT.S3_ACCESS_CHECK (c1)
-  FROM (SELECT $1 FROM 's3://tuva-public-resources/tuva-core/1.0.0/synthetic-data/small/')
+-- Mirrors the_tuva_project.snowflake__load_seed: no transformation subquery,
+-- unquoted s3:// folder + PATTERN. The 1-column table keeps only the first
+-- field of each row (ERROR_ON_COLUMN_COUNT_MISMATCH = FALSE).
+COPY INTO TUVA_DEMO.TUVA_PREFLIGHT.S3_ACCESS_CHECK
+  FROM s3://tuva-public-resources/tuva-core/1.0.0/synthetic-data/small
   FILE_FORMAT = (TYPE = CSV COMPRESSION = GZIP SKIP_HEADER = 1
-                 FIELD_OPTIONALLY_ENCLOSED_BY = '"' ERROR_ON_COLUMN_COUNT_MISMATCH = FALSE)
+                 EMPTY_FIELD_AS_NULL = TRUE
+                 FIELD_OPTIONALLY_ENCLOSED_BY = '"'
+                 ERROR_ON_COLUMN_COUNT_MISMATCH = FALSE)
   PATTERN = '.*/synthetic_data__appointment[.]csv[.]gz'
   ON_ERROR = ABORT_STATEMENT;

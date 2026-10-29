@@ -42,7 +42,8 @@ def test_probe_uri_matches_tuva_layout() -> None:
 def test_copy_uses_inline_s3_url_into_temp_table_only() -> None:
     stmts = preflight.build_statements(URI, "TUVA_DEMO")
     assert "temporary table TUVA_DEMO.TUVA_PREFLIGHT.S3_ACCESS_CHECK" in stmts[1]
-    assert f"'s3://{URI}/'" in stmts[2]
+    assert f"from s3://{URI}\n" in stmts[2]
+    assert "select" not in stmts[2].lower()  # no transformation subquery on an inline URL
     assert "synthetic_data__appointment" in stmts[2]
     assert all("TUVA_DEMO." in s for s in stmts)  # never touches another database
 

@@ -1,0 +1,169 @@
+name: Tuva build -- Snowflake (production)
+
+# Manual only. The `production` environment should require a reviewer, so every
+# run that writes to Snowflake passes a human approval gate first.
+on:
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: "Why are you running this? (recorded in the audit log)"
+        required: true
+        type: string
+      scope:
+        description: "core = synthetic Input Layer + Tuva Core; all = + all 8 data marts"
+        required: true
+        default: core
+        type: choice
+        options: [core, all]
+      synthetic_data_size:
+        description: "Tuva synthetic payload"
+        required: true
+        default: small
+        type: choice
+        options: [small, large]
+      data_quality:
+        description: "Also build Structural/Logical Data Quality result tables"
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tuva-snowflake-production
+  cancel-in-progress: false
+
+env:
+  PYTHON_VERSION: "3.12"
+  # Immutable commit for tuva-core tag v1.0.0 (verified 2026-10-28).
+  TUVA_CORE_REPO: tuva-health/tuva-core
+  TUVA_CORE_REF: 131d12a5225282563917b76af92718b555c24d4d
+  # Same parser limits Tuva's own CI uses for its large generated SQL.
+  DBT_SQLPARSE_OPTIONS: '{"MAX_GROUPING_DEPTH": 100, "MAX_GROUPING_TOKENS": 100000}'
+
+jobs:
+  build:
+    name: dbt build (${{ inputs.scope }}, ${{ inputs.synthetic_data_size }})
+    runs-on: ubuntu-24.04
+    environment: production
+    timeout-minutes: 120
+    env:
+      DBT_PROFILES_DIR: ${{ github.workspace }}/profiles
+      DBT_PROJECT_DIR: ${{ github.workspace }}/tuva-core/integration_tests
+      DBT_TARGET_PATH: ${{ github.workspace }}/dbt-target
+      DBT_SEND_ANONYMOUS_USAGE_STATS: "false"
+      SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
+      SNOWFLAKE_USER: ${{ vars.SNOWFLAKE_USER || 'TUVA_DEMO_SVC' }}
+      SNOWFLAKE_PRIVATE_KEY: ${{ secrets.SNOWFLAKE_PRIVATE_KEY }}
+      SNOWFLAKE_PRIVATE_KEY_PASSPHRASE: ${{ secrets.SNOWFLAKE_PRIVATE_KEY_PASSPHRASE }}
+      SNOWFLAKE_ROLE: TUVA_DEMO_TRANSFORMER
+      SNOWFLAKE_WAREHOUSE: ${{ vars.SNOWFLAKE_WAREHOUSE || 'TUVA_DEMO_WH' }}
+      SNOWFLAKE_DATABASE: TUVA_DEMO
+      DBT_QUERY_TAG: tuva-demo|run=${{ github.run_id }}.${{ github.run_attempt }}|actor=${{ github.actor }}|sha=${{ github.sha }}
+      # Inputs go through env, never interpolated into shell (script-injection safe).
+      RUN_REASON: ${{ inputs.reason }}
+      BUILD_SCOPE: ${{ inputs.scope }}
+      SYNTHETIC_DATA_SIZE: ${{ inputs.synthetic_data_size }}
+      DATA_QUALITY: ${{ inputs.data_quality }}
+    steps:
+      - name: Guard - target must be the isolated demo database
+        run: |
+          set -euo pipefail
+          if [[ "${SNOWFLAKE_DATABASE}" != "TUVA_DEMO" ]]; then
+            echo "::error::Refusing to build outside TUVA_DEMO (got ${SNOWFLAKE_DATABASE})"; exit 1
+          fi
+          for s in SNOWFLAKE_ACCOUNT SNOWFLAKE_PRIVATE_KEY; do
+            if [[ -z "${!s}" ]]; then echo "::error::Missing secret ${s}"; exit 1; fi
+          done
+
+      - name: Checkout this repo
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Checkout Tuva Core v1.0.0 (pinned commit)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: ${{ env.TUVA_CORE_REPO }}
+          ref: ${{ env.TUVA_CORE_REF }}
+          path: tuva-core
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install pinned dbt
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          python -m pip check
+          dbt --version
+
+      - name: Build dbt vars
+        id: vars
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os
+          v = {
+              "synthetic_data_size": os.environ["SYNTHETIC_DATA_SIZE"],
+              "data_quality_enabled": os.environ["DATA_QUALITY"] == "true",
+          }
+          print("json=" + json.dumps(v))
+          PY
+
+      - name: dbt debug (connection + grants)
+        run: dbt debug --project-dir "$DBT_PROJECT_DIR"
+
+      - name: Preflight - can this account load Tuva's public S3 seeds?
+        run: python -m tuva_demo.preflight --size "$SYNTHETIC_DATA_SIZE" --out preflight.json
+
+      - name: dbt deps
+        run: dbt deps --project-dir "$DBT_PROJECT_DIR"
+
+      - name: dbt build
+        env:
+          DBT_VARS: ${{ steps.vars.outputs.json }}
+        run: |
+          set -euo pipefail
+          select_args=()
+          if [[ "${BUILD_SCOPE}" == "core" ]]; then
+            select_args=(--select package:integration_tests package:the_tuva_project)
+          fi
+          dbt build \
+            --project-dir "$DBT_PROJECT_DIR" \
+            --target-path "$DBT_TARGET_PATH" \
+            --full-refresh \
+            --vars "$DBT_VARS" \
+            "${select_args[@]}"
+
+      - name: Smoke check (read-only role, aggregate counts)
+        if: success()
+        env:
+          SNOWFLAKE_ROLE: TUVA_DEMO_READER
+        run: python -m tuva_demo.smoke --manifest "$DBT_TARGET_PATH/manifest.json" --out smoke.json
+
+      - name: Audit record (who / what / when / why)
+        if: always()
+        run: |
+          if [[ -f "$DBT_TARGET_PATH/run_results.json" ]]; then
+            python -m tuva_demo.audit --run-results "$DBT_TARGET_PATH/run_results.json" --out audit.json
+          else
+            echo "::warning::No run_results.json; dbt did not reach the build step."
+          fi
+
+      - name: Upload audit artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: tuva-build-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 90
+          if-no-files-found: warn
+          path: |
+            audit.json
+            preflight.json
+            smoke.json
+            dbt-target/run_results.json

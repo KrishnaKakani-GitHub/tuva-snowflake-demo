@@ -24,6 +24,7 @@ isolated Snowflake footprint, with the controls a real deployment would have.
 
 ```
 snowflake/01_setup.sql        one-time admin setup (roles, warehouse, DB, monitor, service user)
+snowflake/02_add_viewer.sql   adds a read-only human login for the demo data
 snowflake/99_teardown.sql     removes every TUVA_DEMO_* object
 profiles/profiles.yml         env-var-only dbt profile (key-pair auth, query tag)
 .github/workflows/
@@ -60,6 +61,11 @@ grep -v -- '-----' tuva_demo_svc.pub | tr -d '\n'   # public key body for step 2
 Run it in a Snowflake worksheet as an admin who can use `ACCOUNTADMIN`, `SECURITYADMIN` and `SYSADMIN`.
 Paste the public key body into `RSA_PUBLIC_KEY` first.
 
+> **Use Run All** (dropdown next to Run, or Cmd/Ctrl+Shift+Enter). In Snowflake workspaces and
+> worksheets, plain **Run** (Cmd/Ctrl+Enter) runs only the statement under the cursor; after a
+> paste that's the last statement, which then fails because nothing before it was created.
+> You should see one result per statement (about 40), not one.
+
 The last block (step 8) is a real load test. It must return `LOADED` with `rows_loaded > 0`
 before you continue. See "S3 seed loading" below if it doesn't.
 
@@ -91,6 +97,13 @@ and add `environment: production` to the build job for environment-scoped secret
 - `data_quality`: build Structural and Logical Data Quality result tables
 
 The audit summary appears on the run page.
+
+## Giving someone access
+
+- **Run builds:** invite them as a repo collaborator, then add their GitHub username to the
+  `ALLOWED_ACTORS` repository variable (comma-separated, keep the owner in the list).
+- **Query the tables:** run `snowflake/02_add_viewer.sql` after filling in its placeholders.
+  It creates a login with read-only access to `TUVA_DEMO` and nothing else.
 
 ## S3 seed loading
 

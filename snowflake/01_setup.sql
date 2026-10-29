@@ -92,8 +92,14 @@ GRANT ROLE TUVA_DEMO_TRANSFORMER TO USER TUVA_DEMO_SVC;
 -- The post-build smoke check verifies with the read-only role.
 GRANT ROLE TUVA_DEMO_READER      TO USER TUVA_DEMO_SVC;
 
--- 6. Optional: give a human read-only access ----------------------------------
--- GRANT ROLE TUVA_DEMO_READER TO USER <EXISTING_SNOWFLAKE_USER>;
+-- 6. Let the admin running this script use the demo roles ---------------------
+-- USE ROLE needs the role granted to your user; inheriting it through SYSADMIN
+-- is not enough. Step 8 runs as TUVA_DEMO_TRANSFORMER, and you'll explore the
+-- results as TUVA_DEMO_READER. (To add another person: same GRANT, their user.)
+USE ROLE SECURITYADMIN;
+SET me = '"' || CURRENT_USER() || '"';
+GRANT ROLE TUVA_DEMO_TRANSFORMER TO USER IDENTIFIER($me);
+GRANT ROLE TUVA_DEMO_READER      TO USER IDENTIFIER($me);
 
 -- 7. Verify grants -------------------------------------------------------------
 SHOW GRANTS TO ROLE TUVA_DEMO_TRANSFORMER;

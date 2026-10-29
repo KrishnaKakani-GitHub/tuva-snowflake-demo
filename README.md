@@ -13,7 +13,7 @@ isolated Snowflake footprint, with the controls a real deployment would have.
 | Isolation | Dedicated `TUVA_DEMO` database, `TUVA_DEMO_WH` warehouse, `TUVA_DEMO_*` roles. No grants on any other database. The workflow refuses to run if the target isn't `TUVA_DEMO`. |
 | Least privilege | `TUVA_DEMO_TRANSFORMER` (build) owns only `TUVA_DEMO`. `TUVA_DEMO_READER` is read-only and is what the smoke check and humans use. |
 | No passwords | `TUVA_DEMO_SVC` is a `TYPE = SERVICE` user with key-pair auth only. |
-| Human approval gate | Builds run only by manual dispatch, inside the `production` GitHub environment with a required reviewer. |
+| Human approval gate | Builds run only by manual dispatch. The person must have write access, be on the `ALLOWED_ACTORS` allowlist (defaults to the repo owner), and type `BUILD` to confirm. This works on every GitHub plan; environment reviewers would need a paid plan for a private repo. |
 | Audit (who/what/when/why) | Each run requires a written reason. An audit record (actor, commit, Tuva ref, scope, node statuses, reason) goes to the job summary and a 90-day artifact. Every Snowflake statement carries a `QUERY_TAG` with run id, actor and commit. |
 | Reproducibility | Tuva pinned to the `v1.0.0` commit SHA. dbt pinned to the exact versions Tuva's own Snowflake CI uses. GitHub Actions pinned by SHA. |
 | Cost | X-Small warehouse, 60s auto-suspend, 1-hour statement timeout, 20-credit monthly resource monitor that suspends at 100%. |
@@ -42,9 +42,10 @@ requirements.txt              dbt-core 1.11.14, dbt-snowflake 1.11.6 (Tuva v1.0.
 ### 0. Pick the Snowflake account
 
 **Recommended: a dedicated Snowflake trial or sandbox account used only for this demo.**
-You're its `ACCOUNTADMIN`, it holds no real data, the settings that can block Tuva's S3 seed loads are off by default,
-and deleting it later removes everything. Use a shared company account only if the setup
-step 8 load test passes there.
+You're its `ACCOUNTADMIN`, it holds no real data, and the settings that can block Tuva's S3 seed
+loads are off by default. A trial runs 30 days (or until its free balance is used), then is
+suspended; `99_teardown.sql` removes the demo objects sooner. Use a shared company account only
+if the setup step 8 load test passes there.
 
 ### 1. Generate the service key pair (locally; never commit it)
 
@@ -64,10 +65,9 @@ before you continue. See "S3 seed loading" below if it doesn't.
 
 ### 3. Configure GitHub
 
-1. **Settings → Environments → New environment → `production`**
-   - Required reviewers: add the approver(s).
-   - Deployment branches: `main` only.
-2. Add **environment secrets** (in `production`, not repo-level):
+**Settings → Secrets and variables → Actions.**
+
+1. **Secrets** tab → **New repository secret**, three times:
 
    | Secret | Value |
    |---|---|
@@ -75,18 +75,22 @@ before you continue. See "S3 seed loading" below if it doesn't.
    | `SNOWFLAKE_PRIVATE_KEY` | full contents of `tuva_demo_svc.p8`, including the BEGIN/END lines |
    | `SNOWFLAKE_PRIVATE_KEY_PASSPHRASE` | the passphrase from step 1 |
 
-3. Optional **environment variables**: `SNOWFLAKE_USER` (default `TUVA_DEMO_SVC`) and
-   `SNOWFLAKE_WAREHOUSE` (default `TUVA_DEMO_WH`).
+2. Optional, **Variables** tab:
+   - `ALLOWED_ACTORS`: comma-separated GitHub usernames allowed to run builds. Defaults to the repo owner only.
+   - `SNOWFLAKE_USER` (default `TUVA_DEMO_SVC`) and `SNOWFLAKE_WAREHOUSE` (default `TUVA_DEMO_WH`).
+
+On GitHub Pro, Team or Enterprise you can move the secrets into a `production` environment
+and add `environment: production` to the build job for environment-scoped secrets.
 
 ### 4. Run it
 
-**Actions → "Tuva build -- Snowflake (production)" → Run workflow**, then enter a reason and choose:
+**Actions → "Tuva build -- Snowflake (production)" → Run workflow**, type `BUILD` to confirm, enter a reason, and choose:
 
 - `scope`: `core` (synthetic Input Layer + Tuva Core) or `all` (+ all eight data marts)
 - `synthetic_data_size`: `small` (default) or `large`
 - `data_quality`: build Structural and Logical Data Quality result tables
 
-A reviewer approves the run, and then it builds. The audit summary appears on the run page.
+The audit summary appears on the run page.
 
 ## S3 seed loading
 
@@ -144,4 +148,4 @@ Then update `requirements.txt` to the dbt versions in that tag's `.github/workfl
 
 ## Teardown
 
-Run `snowflake/99_teardown.sql` as an admin, then delete the `production` environment secrets.
+Run `snowflake/99_teardown.sql` as an admin, then delete the three repository secrets.
